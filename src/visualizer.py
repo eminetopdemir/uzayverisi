@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.dates as mdates
 from pathlib import Path
+from typing import Optional, Union
 import pandas as pd
 import logging
 
@@ -43,7 +44,7 @@ def _fmt_axis(ax, title: str, ylabel: str):
 
 
 def plot_results(df: pd.DataFrame,
-                 out_path: Path | str | None = None) -> Path:
+                 out_path: Union[Path, str, None] = None) -> Path:
     """
     6 panelli SNR/Gürültü grafiği oluştur ve kaydet.
 
@@ -99,13 +100,13 @@ def plot_results(df: pd.DataFrame,
     ax2.semilogy(t, df["N_thermal"],        color=_C.THERMAL, lw=1.4,
                  label="N_thermal  (Nyquist 1928)")
     ax2.semilogy(t, df["N_scint"],          color=_C.SCINT,   lw=1.4,
-                 label="N_scint  (Rickett 1977)")
+                 label="N_sw = a·|Bz|+b·vn+c·Kp²+d·flux  (Dungey/Parker)")
     ax2.semilogy(t, df["N_rad"] + 1e-30,   color=_C.RAD,     lw=1.4,
-                 label="N_rad  (Xapsos 2000)", alpha=0.9)
+                 label="N_rad → N_sw·d·flux'a dahil", alpha=0.9)
     ax2.semilogy(t, df["N_total"],          color="white",    lw=2.0,
-                 ls="--", alpha=0.8, label="N_total")
+                 ls="--", alpha=0.8, label="N_total = N_th + N_sw")
     ax2.legend(fontsize=7, loc="upper right", framealpha=0.2, ncol=2)
-    _fmt_axis(ax2, "Gürültü Bileşenleri [W]  (logaritmik)", "Güç [W]")
+    _fmt_axis(ax2, "Gürültü Bileşenleri [W]  (logaritmik)  ·  Fizik Modeli", "Güç [W]")
 
     # ══ P3: Plazma Sıcaklığı ═══════════════════════════════════
     ax3 = fig.add_subplot(gs[2, 0])
@@ -121,7 +122,7 @@ def plot_results(df: pd.DataFrame,
     ax4.plot(t, proxy, color=_C.SCINT, lw=1.2)
     ax4.fill_between(t, proxy, alpha=0.10, color=_C.SCINT)
     _fmt_axis(ax4,
-              "ρ·v²  [×10⁶ cm⁻³·(km/s)²]  →  N_scint",
+              "ρ·v²  [×10⁶ cm⁻³·(km/s)²]  →  N_sw b·(v·n) terimi",
               "ρv² proxy")
 
     # ══ P5: Proton Flux ════════════════════════════════════════
@@ -169,7 +170,7 @@ def plot_results(df: pd.DataFrame,
              ha="center", fontsize=13, fontweight="bold",
              color="#e8f4fd", fontfamily="monospace")
     fig.text(0.5, 0.945,
-             "Nyquist (1928)  ·  Rickett (1977)  ·  Xapsos (2000)  ·  Ippolito (2017)",
+             "FSPL + Nyquist (1928)  ·  Dungey (1961)  ·  Parker (1958)  ·  Secan (1997)  ·  Ippolito (2017)",
              ha="center", fontsize=8, color="#4a6280",
              fontfamily="monospace")
 

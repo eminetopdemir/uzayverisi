@@ -14,6 +14,7 @@ import pandas as pd
 import json
 import logging
 from pathlib import Path
+from typing import Optional
 from config import CFG
 
 log = logging.getLogger(__name__)
@@ -47,41 +48,45 @@ def _interpolate(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_omni(filepath: Path = CFG.paths.omni_file) -> pd.DataFrame:
     """
-    NASA OMNI saatlik veri dosyasını yükle.
+    NASA OMNI saatlık JSON veri dosyasını yükle.
 
-    Sütunlar:
-        Scalar_B [nT], BZ [nT GSM], Temp [K], Dens [N/cm³],
-        Speed [km/s], FlowP [nPa], Kp [×10]
+    Beklenen JSON alan adları (OMNIWeb JSON schema):
+        year, doy, hour,
+        scalar_B_nT, Bz_nT_GSM, sw_plasma_temperature_K,
+        sw_proton_density_N_cm3, sw_plasma_speed_km_s,
+        flow_pressure, Kp_index, proton_flux_gt1MeV
 
     Döndürür:
         pd.DataFrame  — DatetimeIndex, temizlenmiş değerler
     """
+    if filepath is None:
+        filepath = CFG.paths.omni_file
+
+    with open(filepath, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
     records = []
-    with open(filepath, "r") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("YEAR"):
-                continue
-            parts = line.split()
-            if len(parts) < 11:
-                continue
-            try:
-                year, doy, hr = int(parts[0]), int(parts[1]), int(parts[2])
-                dt = (pd.Timestamp(f"{year}-01-01")
-                      + pd.Timedelta(days=doy - 1, hours=hr))
-                records.append({
-                    "time":     dt,
-                    "Scalar_B": float(parts[3]),
-                    "BZ":       float(parts[4]),
-                    "Temp":     float(parts[5]),
-                    "Dens":     float(parts[6]),
-                    "Speed":    float(parts[7]),
-                    "FlowP":    float(parts[8]),
-                    "Kp":       float(parts[9]) / 10.0,   # → 0-9 skalası
-                    "PF1":      float(parts[10]),
-                })
-            except (ValueError, IndexError):
-                continue
+    for entry in data:
+        try:
+            year = int(entry["year"])
+            doy  = int(entry["doy"])
+            hr   = int(entry["hour"])
+            dt = (pd.Timestamp(f"{year}-01-01")
+                  + pd.Timedelta(days=doy - 1, hours=hr))
+            records.append({
+                "time":     dt,
+                "Scalar_B": float(entry.get("scalar_B_nT",                np.nan)),
+                "BZ":       float(entry.get("Bz_nT_GSM",                 np.nan)),
+                "Temp":     float(entry.get("sw_plasma_temperature_K",   np.nan)),
+                "Dens":     float(entry.get("sw_proton_density_N_cm3",   np.nan)),
+                "Speed":    float(entry.get("sw_plasma_speed_km_s",      np.nan)),
+                "FlowP":    float(entry.get("flow_pressure",             np.nan)),
+                # Kp_index in OMNIWeb is stored as Kp×10 (e.g. 27 = Kp 2.7)
+                "Kp":       float(entry.get("Kp_index",                  np.nan)) / 10.0,
+                "PF1":      float(entry.get("proton_flux_gt1MeV",        np.nan)),
+            })
+        except (ValueError, KeyError, TypeError):
+            continue
 
     df = pd.DataFrame(records).set_index("time").sort_index()
     df = df[~df.index.duplicated(keep="first")]
@@ -93,7 +98,10 @@ def load_omni(filepath: Path = CFG.paths.omni_file) -> pd.DataFrame:
     df["PF1"] = _replace_fill(df["PF1"])
 
     df = _interpolate(df)
-    log.info(f"[OMNI]  {len(df)} satır yüklendi: {df.index[0]} → {df.index[-1]}")
+    if len(df):
+        log.info(f"[OMNI]  {len(df)} satır yüklendi: {df.index[0]} → {df.index[-1]}")
+    else:
+        log.warning("[OMNI]  Hiç satır yüklenemedi — dosya formatını kontrol edin.")
     return df
 
 
@@ -101,56 +109,39 @@ def load_omni(filepath: Path = CFG.paths.omni_file) -> pd.DataFrame:
 # RTSW YÜKLEYİCİ  (1-Dakikalık)
 # ═══════════════════════════════════════════════════════════════
 
-def load_rtsw(filepath: Path = CFG.paths.rtsw_file) -> pd.DataFrame:
+def load_rtsw(filepath: Optional[Path] = CFG.paths.rtsw_file) -> pd.DataFrame:
     """
-    SWPC/NOAA RTSW (Real-Time Solar Wind) veri dosyasını yükle.
-    Başlık satırları otomatik atlanır.
+    SWPC/NOAA RTSW JSON veri dosyasını yükle.
 
-    Sütunlar:
+    Beklenen JSON alan adları (RTSW plot-data schema):
+        timestamp, source,
         Bt, Bx, By, Bz [nT], Phi [°], Theta [°],
         Dens [N/cm³], Speed [km/s], Temp [K]
     """
-    col_names = [
-        "Timestamp", "Source",
-        "Bt", "Bx", "By", "Bz",
-        "Phi", "Theta",
-        "Dens", "Speed", "Temp"
-    ]
-    records = []
+    if filepath is None:
+        filepath = CFG.paths.rtsw_file
+
     with open(filepath, "r", encoding="utf-8-sig") as fh:
-        for line in fh:
-            line = line.strip()
-            # Başlık / yorum satırlarını atla
-            if (not line
-                    or line.startswith("#")
-                    or line.startswith("RTSW")
-                    or line.startswith("More")
-                    or line.startswith("Start")
-                    or line.startswith("End")
-                    or line.startswith("Source")
-                    or line.startswith("Resolution")
-                    or line.startswith("Phi")
-                    or line.startswith("Timestamp")):
-                continue
-            parts = line.split()
-            if len(parts) < 11:
-                continue
-            try:
-                dt = pd.Timestamp(f"{parts[0]} {parts[1]}")
-                records.append({
-                    "time":  dt,
-                    "Bt":    float(parts[2]),
-                    "Bx":    float(parts[3]),
-                    "By":    float(parts[4]),
-                    "Bz":    float(parts[5]),
-                    "Phi":   float(parts[6]),
-                    "Theta": float(parts[7]),
-                    "Dens":  float(parts[8]),
-                    "Speed": float(parts[9]),
-                    "Temp":  float(parts[10]),
-                })
-            except (ValueError, IndexError):
-                continue
+        data = json.load(fh)
+
+    records = []
+    for entry in data:
+        try:
+            dt = pd.Timestamp(entry["timestamp"]).tz_localize(None)
+            records.append({
+                "time":  dt,
+                "Bt":    float(entry.get("Bt",    np.nan)),
+                "Bx":    float(entry.get("Bx",    np.nan)),
+                "By":    float(entry.get("By",    np.nan)),
+                "Bz":    float(entry.get("Bz",    np.nan)),
+                "Phi":   float(entry.get("Phi",   np.nan)),
+                "Theta": float(entry.get("Theta", np.nan)),
+                "Dens":  float(entry.get("Dens",  np.nan)),
+                "Speed": float(entry.get("Speed", np.nan)),
+                "Temp":  float(entry.get("Temp",  np.nan)),
+            })
+        except (ValueError, KeyError, TypeError):
+            continue
 
     df = pd.DataFrame(records).set_index("time").sort_index()
     df = df[~df.index.duplicated(keep="first")]
@@ -162,7 +153,10 @@ def load_rtsw(filepath: Path = CFG.paths.rtsw_file) -> pd.DataFrame:
                                 lower_thresh=CFG.fill.RTSW_FLAG)
 
     df = _interpolate(df)
-    log.info(f"[RTSW]  {len(df)} satır yüklendi: {df.index[0]} → {df.index[-1]}")
+    if len(df):
+        log.info(f"[RTSW]  {len(df)} satır yüklendi: {df.index[0]} → {df.index[-1]}")
+    else:
+        log.warning("[RTSW]  Hiç satır yüklenemedi — dosya formatını kontrol edin.")
     return df
 
 
@@ -170,12 +164,14 @@ def load_rtsw(filepath: Path = CFG.paths.rtsw_file) -> pd.DataFrame:
 # GOES YÜKLEYİCİ  (JSON, opsiyonel)
 # ═══════════════════════════════════════════════════════════════
 
-def load_goes(filepath: Path = CFG.paths.goes_file) -> pd.DataFrame:
+def load_goes(filepath: Optional[Path] = CFG.paths.goes_file) -> pd.DataFrame:
     """
     GOES proton flux JSON dosyasını yükle.
     Yalnızca yüksek enerji kanalı (A5 / >55 MeV) kullanılır.
     Dosya bulunamazsa boş DataFrame döndürür.
     """
+    if filepath is None:
+        filepath = CFG.paths.goes_file
     if not Path(filepath).exists():
         log.warning(f"[GOES]  Dosya bulunamadı: {filepath} — sıfır flux varsayılıyor.")
         return pd.DataFrame(columns=["flux"])
@@ -207,34 +203,85 @@ def load_goes(filepath: Path = CFG.paths.goes_file) -> pd.DataFrame:
 
 def merge_all(df_rtsw: pd.DataFrame,
               df_omni: pd.DataFrame,
-              df_goes: pd.DataFrame | None = None) -> pd.DataFrame:
+              df_goes: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     OMNI (saatlik) ve GOES (dakikalık) verilerini RTSW'nin
-    1-dakikalık çözünürlüğüne yeniden örnekler ve birleştirir.
+    1-dakikalık çözünürlüğüne hizalar ve birleştirir.
+
+    Strateji:
+        pd.merge_asof(tolerance=CFG.phys.OMNI_TOLERANCE)  →  OMNI alanları yalnızca
+        gerçek zaman örtüşmesi olan satırlara eklenir; örtüşme yoksa NaN kalır
+        (asla proxy/sabit dolgu yapılmaz).
+        Kp NaN kaldığında storm_scaling RTSW-yerel Bz+Pdyn kriterini kullanır.
 
     Çıktı sütunları:
-        Bz, Dens, Speed, Temp,      (RTSW'den)
-        Kp, Scalar_B,               (OMNI'den, resampled)
-        flux                        (GOES'tan)
+        Bz, Dens, Speed, Temp, Pdyn    (RTSW'den — her zaman gerçek veri)
+        Kp, Scalar_B, BZ_omni          (OMNI'den — yalnızca zaman örtüşmesi varsa)
+        flux                           (GOES'tan)
     """
-    # OMNI → dakikalık lineer interpolasyon
-    omni_1min = df_omni.resample("1min").interpolate(method="time")
-
+    # ── RTSW tabanı + fiziksel türetilmiş sütun ──────────────
     df = df_rtsw[["Bz", "Dens", "Speed", "Temp"]].copy()
-    df = df.join(omni_1min[["Kp", "Scalar_B", "BZ"]], how="left")
+    # Dinamik basınç: Pdyn [nPa] = 1.67e-6 × n [cm⁻³] × v² [km/s]²
+    # (tamamen RTSW'den, proxy değil)
+    df["Pdyn"] = 1.67e-6 * df["Dens"] * df["Speed"] ** 2
 
-    # BZ: RTSW öncelikli, eksikse OMNI
-    df["Kp"]       = df["Kp"].fillna(2.0)
-    df["Scalar_B"] = df["Scalar_B"].fillna(df["Scalar_B"].median())
-    df.rename(columns={"BZ": "BZ_omni"}, inplace=True)
+    # ── OMNI → merge_asof ile katı zaman toleransı ───────────
+    # Tolerans dışındaki satırlar NaN döner (proxy enjeksiyonu olmaz).
+    omni_cols = (df_omni[["Kp", "Scalar_B", "BZ"]]
+                 .rename(columns={"BZ": "BZ_omni"})
+                 .reset_index()
+                 .sort_values("time"))
 
-    # GOES flux ekle
-    if df_goes is not None and len(df_goes) > 0:
-        df = df.join(df_goes[["flux"]], how="left")
-        df["flux"] = df["flux"].fillna(0.0)
+    merged = pd.merge_asof(
+        df.reset_index().sort_values("time"),
+        omni_cols,
+        on="time",
+        direction="nearest",
+        tolerance=pd.Timedelta(CFG.phys.OMNI_TOLERANCE),
+    ).set_index("time").sort_index()
+
+    # ── Örtüşme raporu ───────────────────────────────────────
+    n_matched = merged["Kp"].notna().sum()
+    n_total   = len(merged)
+    if n_matched == 0:
+        log.error(
+            "[MERGE] OMNI ve RTSW'nin zaman aralıkları hiç örtüşmüyor!\n"
+            f"         OMNI : {df_omni.index[0]}  →  {df_omni.index[-1]}\n"
+            f"         RTSW : {df_rtsw.index[0]}  →  {df_rtsw.index[-1]}\n"
+            f"         Tolerans : {CFG.phys.OMNI_TOLERANCE}\n"
+            "         → Kp ve BZ_omni sütunları NaN olarak bırakıldı.\n"
+            "           Fırtına algılama otomatik olarak RTSW-yerel\n"
+            "           Bz + Pdyn kriterine geçecek (proxy yok).\n"
+            "           Gerçek Kp verisi için OMNI dosyasını RTSW dönemiyle\n"
+            "           örtüşen bir tarih aralığı için güncelleyin."
+        )
+    elif n_matched < n_total * 0.5:
+        log.warning(
+            f"[MERGE] OMNI yalnızca %{100*n_matched/n_total:.0f} RTSW satırıyla "
+            f"eşleşti ({n_matched}/{n_total}). Zaman örtüşmesini doğrulayın."
+        )
     else:
-        df["flux"] = 0.0
+        log.info(f"[MERGE] OMNI {n_matched}/{n_total} satırla eşleşti.")
 
-    df = df.ffill().bfill()
-    log.info(f"[MERGE] Birleşik tablo: {len(df)} satır, sütunlar: {list(df.columns)}")
-    return df
+    # ── Scalar_B: gerçek medyan, tümü NaN ise standart değer ─
+    scalar_b_median = merged["Scalar_B"].median()
+    merged["Scalar_B"] = merged["Scalar_B"].fillna(
+        scalar_b_median if pd.notna(scalar_b_median) else 5.0
+    )
+    # Kp'yi asla sabit/proxy değerle doldurmuyoruz — NaN olarak kalır,
+    # storm_scaling bunu RTSW kriterinin kullanılması gerektiği sinyal olarak okur.
+
+    # ── GOES flux — 1-dakikalık ızgaraya yeniden örnekle ─────
+    if df_goes is not None and len(df_goes) > 0:
+        goes_1min = df_goes[["flux"]].resample("1min").interpolate(method="time")
+        merged = merged.join(goes_1min, how="left")
+        merged["flux"] = merged["flux"].fillna(0.0)
+    else:
+        merged["flux"] = 0.0
+
+    merged = merged.ffill().bfill()
+    log.info(
+        f"[MERGE] Birleşik tablo: {len(merged)} satır, "
+        f"sütunlar: {list(merged.columns)}"
+    )
+    return merged

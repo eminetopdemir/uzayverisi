@@ -16,6 +16,7 @@ Referanslar:
 
 import numpy as np
 import pandas as pd
+from typing import Optional
 from config import CFG
 
 rng = np.random.default_rng(seed=42)
@@ -114,25 +115,48 @@ def radiation_noise(flux: np.ndarray) -> np.ndarray:
 
 def storm_scaling(bz: np.ndarray,
                   kp: np.ndarray,
-                  total_noise: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+                  total_noise: np.ndarray,
+                  pdyn: Optional[np.ndarray] = None,
+                  ) -> tuple[np.ndarray, np.ndarray]:
     """
     Jeomanyetik fırtına sırasında tüm gürültü bileşenlerini ölçekle.
 
-    Kriter (Ippolito 2017, Bölüm 9.3):
-        Bz < 0  VE  Kp > 5  →  N_total × STORM_COEFF
+    Birincil kriter (Kp gerçek OMNI verisi mevcutsa):
+        Bz < 0  VE  Kp > 5  (Ippolito 2017, Bölüm 9.3)
+
+    RTSW-yerel yedek kriter (OMNI kapsamı yoksa, Kp NaN):
+        Bz < STORM_BZ_THRESH  VE  Pdyn > STORM_PDYN_THRESH
+        (Newell et al. 2008 â€“ sürekli iletim fonksiyonundan türetilmiş;
+         proxy/sabit değerler içermez, yalnızca ölçülen RTSW büyüklükler kullanılır)
 
     Parametreler
     ------------
     bz          : np.ndarray  —  Bz bileşeni  [nT GSM]
-    kp          : np.ndarray  —  Kp indeksi   [0–9]
+    kp          : np.ndarray  —  Kp indeksi   [0–9], NaN = OMNI mevcut değil
     total_noise : np.ndarray  —  ham toplam gürültü  [W]
+    pdyn        : np.ndarray | None  —  dinamik basınç  [nPa] (RTSW'den)
 
     Döndürür
     --------
     scaled_noise : np.ndarray  —  ölçeklenmiş gürültü [W]
     storm_flag   : np.ndarray (bool)  —  fırtına anı maskesi
     """
-    storm_flag   = (bz < 0) & (kp > 5)
+    kp_available = np.isfinite(kp)
+
+    # Birincil kriter: gerçek Kp varsa kullan
+    storm_primary = kp_available & (bz < 0) & (kp > 5)
+
+    # RTSW-yerel yedek kriter: Kp NaN olduğunda devreye girer
+    if pdyn is not None:
+        storm_fallback = (
+            (~kp_available)
+            & (bz  < CFG.phys.STORM_BZ_THRESH)
+            & (pdyn > CFG.phys.STORM_PDYN_THRESH)
+        )
+    else:
+        storm_fallback = np.zeros(len(bz), dtype=bool)
+
+    storm_flag   = storm_primary | storm_fallback
     scaled_noise = total_noise.copy()
     scaled_noise[storm_flag] *= CFG.phys.STORM_COEFF
     return scaled_noise, storm_flag
@@ -166,37 +190,13 @@ def compute_snr(total_noise: np.ndarray,
 
 def run_noise_pipeline(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Birleştirilmiş veri çerçevesini alır; tüm gürültü bileşenlerini
-    ve SNR'yi hesaplar; sonuçları yeni sütunlar olarak döndürür.
+    Fizik tabanlı SNR pipeline'ına yönlendirici.
 
-    Beklenen giriş sütunları: Temp, Dens, Speed, Bz, Kp, flux
+    Bağlantı bütçesi (FSPL + Pt + Gt + Gr), uzay havası gürültüsü
+    (N_sw = a·|Bz| + b·v·n + c·Kp² + d·flux) ve sigmoid veri kaybı
+    modeli için physics_model.run_physics_pipeline() kullanılır.
+
+    Referans: physics_model.py belge dizisi.
     """
-    out = df.copy()
-
-    out["N_thermal"] = thermal_noise(out["Temp"].values)
-    out["N_scint"]   = scintillation_noise(out["Dens"].values,
-                                           out["Speed"].values)
-    out["N_rad"]     = radiation_noise(out["flux"].values)
-
-    out["N_total_raw"] = (out["N_thermal"]
-                          + out["N_scint"]
-                          + out["N_rad"])
-
-    out["N_total"], out["storm_flag"] = storm_scaling(
-        out["Bz"].values,
-        out["Kp"].values,
-        out["N_total_raw"].values,
-    )
-
-    out["SNR_lin"], out["SNR_dB"] = compute_snr(out["N_total"].values)
-
-    # Özet log
-    n_storm = int(out["storm_flag"].sum())
-    import logging
-    log = logging.getLogger(__name__)
-    log.info(f"[MODEL] Ortalama SNR : {out['SNR_dB'].mean():.2f} dB")
-    log.info(f"[MODEL] Min SNR      : {out['SNR_dB'].min():.2f} dB")
-    log.info(f"[MODEL] Max SNR      : {out['SNR_dB'].max():.2f} dB")
-    log.info(f"[MODEL] Fırtına süresi: {n_storm} dakika")
-
-    return out
+    from physics_model import run_physics_pipeline
+    return run_physics_pipeline(df)

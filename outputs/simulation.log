@@ -1,0 +1,71 @@
+17:24:16  INFO     ============================================================
+17:24:16  INFO       UZAY HAVASI SNR SİMÜLATÖRÜ BAŞLATILIYOR
+17:24:16  INFO     ============================================================
+17:24:16  INFO     ▶ Veri yükleniyor...
+17:24:16  INFO     [OMNI]  240 satır yüklendi: 2026-01-01 00:00:00 → 2026-01-10 23:00:00
+17:24:16  INFO     [RTSW]  1326 satır yüklendi: 2026-03-27 12:00:00 → 2026-03-28 10:06:00
+17:24:16  INFO     [GOES]  286 satır yüklendi.
+17:24:16  INFO     ▶ Veri birleştiriliyor...
+17:24:16  ERROR    [MERGE] OMNI ve RTSW'nin zaman aralıkları hiç örtüşmüyor!
+         OMNI : 2026-01-01 00:00:00  →  2026-01-10 23:00:00
+         RTSW : 2026-03-27 12:00:00  →  2026-03-28 10:06:00
+         Tolerans : 2h
+         → Kp ve BZ_omni sütunları NaN olarak bırakıldı.
+           Fırtına algılama otomatik olarak RTSW-yerel
+           Bz + Pdyn kriterine geçecek (proxy yok).
+           Gerçek Kp verisi için OMNI dosyasını RTSW dönemiyle
+           örtüşen bir tarih aralığı için güncelleyin.
+17:24:16  INFO     [MERGE] Birleşik tablo: 1326 satır, sütunlar: ['Bz', 'Dens', 'Speed', 'Temp', 'Pdyn', 'Kp', 'Scalar_B', 'BZ_omni', 'flux']
+17:24:16  INFO     ▶ Fiziksel gürültü modelleri çalıştırılıyor...
+17:24:16  INFO     [PHYSICS]  FSPL       = 205.10 dB  (d=35786 km, f=12000 MHz)
+17:24:16  INFO     [PHYSICS]  Pr         = 9.7771e-11 W  (-100.1 dBW)
+17:24:16  INFO     [PHYSICS]  N_thermal  = 1.3806e-14 W  (T_sys = 100 K)
+17:24:16  INFO     [PHYSICS]  SNR ortalama = 8.97 dB
+17:24:16  INFO     [PHYSICS]  SNR min      = 2.49 dB
+17:24:16  INFO     [PHYSICS]  SNR maks     = 24.97 dB
+17:24:16  INFO     [PHYSICS]  Veri kaybı ort. = 0.060 %
+17:24:16  INFO     [PHYSICS]  Veri kaybı maks = 7.684 %
+17:24:16  INFO     [PHYSICS]  Fırtına süresi  = 2 dakika
+17:24:16  INFO     ══════════════════════════════════════════════════════════════
+17:24:16  INFO       RF LINK BUDGET
+17:24:16  INFO     ──────────────────────────────────────────────────────────────
+17:24:16  INFO       Scenario                GEO satellite · Ku-band downlink
+17:24:16  INFO       Distance                35,786 km
+17:24:16  INFO       Frequency               12,000 MHz  (12.0 GHz)
+17:24:16  INFO       Tx Power                20.0 dBW  (100 W)
+17:24:16  INFO       Tx Gain                 33.0 dBi
+17:24:16  INFO       Rx Gain                 52.0 dBi
+17:24:16  INFO       T_sys                   100 K  (cooled LNA)
+17:24:16  INFO     ──────────────────────────────────────────────────────────────
+17:24:16  INFO       FSPL                    205.10 dB
+17:24:16  INFO       Pr (received)           9.7771e-11 W  (-100.10 dBW)
+17:24:16  INFO       N_thermal               1.3806e-14 W  (Johnson–Nyquist 1928)
+17:24:16  INFO     ══════════════════════════════════════════════════════════════
+17:24:16  INFO       SIMULATION RESULTS  —  1326 samples  (2026-03-27 12:00 → 2026-03-28 10:06)
+17:24:16  INFO     ──────────────────────────────────────────────────────────────
+17:24:16  INFO       Average SNR             +8.97 dB
+17:24:16  INFO       Min SNR                 +2.49 dB
+17:24:16  INFO       Max SNR                 +24.97 dB
+17:24:16  INFO       Avg data loss           0.0603 %
+17:24:16  INFO       Max data loss           7.6836 %
+17:24:16  INFO       Storm duration          2 min
+17:24:16  INFO     ══════════════════════════════════════════════════════════════
+17:24:16  INFO       REAL-TIME DEMO  —  predict_realtime()
+17:24:16  INFO     ──────────────────────────────────────────────────────────────
+17:24:16  INFO       Scenario              Bz      v      n     Kp       SNR      Loss  Risk
+17:24:16  INFO                           [nT]   km/s   cm⁻³             [dB]       [%]
+17:24:16  INFO       ──────────────────────────────────────────────────────────────
+17:24:16  INFO       Quiet Sun           +0.0    380    4.0    1.0    +14.04    0.000%  low
+17:24:16  INFO       Mild                -5.0    450    8.0    N/A     +4.82    0.799%  moderate
+17:24:16  INFO       G1 Storm           -10.0    500   15.0    5.0     +0.53   37.022%  high
+17:24:16  INFO       G2 Storm           -20.0    600   20.0    6.5     -2.24   90.391%  high
+17:24:16  INFO       G3 Storm           -30.0    680   25.0    7.5     -4.23   98.567%  high
+17:24:16  INFO       G4 Storm           -40.0    750   35.0    8.5     -6.73   99.881%  severe
+17:24:16  INFO       G5 Storm           -50.0    850   50.0    9.0    -10.10   99.996%  severe
+17:24:16  INFO     ──────────────────────────────────────────────────────────────
+17:24:16  INFO       Loss(%) = 100 / (1 + exp(SNR_dB))   -- inflection at SNR = 0 dB  ->  Loss = 50 %
+17:24:16  INFO     ══════════════════════════════════════════════════════════════
+17:24:16  INFO     ▶ Grafik oluşturuluyor...
+17:24:17  INFO     [PLOT]  Grafik kaydedildi → /home/emine/İndirilenler/uzayverisi/outputs/uzayveri.png
+17:24:17  INFO       Grafik → /home/emine/İndirilenler/uzayverisi/outputs/uzayveri.png
+17:24:17  INFO     ✓ Simülasyon tamamlandı.
