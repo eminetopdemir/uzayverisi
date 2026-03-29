@@ -12,3 +12,6 @@ dist/
 
 # Env
 .env
+
+# OS
+__MACOSX/

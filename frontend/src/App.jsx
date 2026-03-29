@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Layout        from './components/Layout'
 import Dashboard     from './components/Dashboard'
 import InputPanel    from './components/InputPanel'
@@ -6,10 +6,12 @@ import { TimeSeriesChart, SignalNoiseChart, HistoricalChart } from './components
 import ScenarioView  from './components/ScenarioView'
 import OptimizationPanel from './components/OptimizationPanel'
 import Explainer     from './components/Explainer'
-import AlertOverlay from './components/AlertOverlay'
+import AlertOverlay  from './components/AlertOverlay'
+import DecisionPanel from './components/DecisionPanel'
+import LiveAdvisoryPanel from './components/LiveAdvisoryPanel'
 import MobileTriggerPage from './components/MobileTriggerPage'
 import usePhysics    from './hooks/usePhysics'
-import { history as apiHistory } from './api/client'
+import { history as apiHistory, getAlert, getWsUrl } from './api/client'
 
 export default function App() {
   // ── Standalone mobile route: no Layout, no sidebar ──────────────
@@ -22,18 +24,150 @@ export default function App() {
   const [operatorDecision, setOperatorDecision] = useState(null)
   const [decisionImpact, setDecisionImpact] = useState(null)
 
+  // DSS state machine: IDLE → ALERT_ACTIVE → DECISION_ACTIVE → (IDLE via DecisionPanel)
+  const [dssPhase, setDssPhase]   = useState('IDLE')
+  const [alertData, setAlertData] = useState(null)
+  const dssPhaseRef = useRef('IDLE')
+  const lastHandledTriggerIdRef = useRef(0)
+  useEffect(() => { dssPhaseRef.current = dssPhase }, [dssPhase])
+
   const { inputs, setInput, result, loading, error, history, applyPreset } = usePhysics()
+
+  // ── Slider-driven alert: when physics model returns high/severe, show alert ──
+  const [sliderAlertPhase, setSliderAlertPhase] = useState('IDLE') // IDLE | ALERT | ADVISORY
+  const [sliderAlertData, setSliderAlertData] = useState(null)
+  const prevSliderRiskRef = useRef('none')
+
+  useEffect(() => {
+    if (!result) return
+    const risk = String(result.risk || 'none').toLowerCase()
+    const prev = prevSliderRiskRef.current
+    prevSliderRiskRef.current = risk
+
+    // Only trigger when risk transitions INTO high/severe from a lower level
+    const isDangerous = risk === 'high' || risk === 'severe'
+    const wasDangerous = prev === 'high' || prev === 'severe'
+    if (isDangerous && !wasDangerous && dssPhaseRef.current === 'IDLE' && sliderAlertPhase === 'IDLE') {
+      setSliderAlertData({
+        risk,
+        alert: true,
+        message: risk === 'severe'
+          ? 'SLIDER INPUT VALUES REACHED CRITICAL LEVEL'
+          : 'SLIDER INPUT VALUES ENTERED DANGER ZONE',
+        action: risk === 'severe' ? 'EMERGENCY_THROTTLE' : 'REDUCE_DATA_RATE',
+        recommended: risk === 'severe' ? '10 Mbps' : '20 Mbps',
+      })
+      setSliderAlertPhase('ALERT')
+    }
+  }, [result, sliderAlertPhase])
 
   // Load historical CSV once on mount
   useEffect(() => {
     apiHistory(300).then(setCsvHistory).catch(() => {})
   }, [])
 
+  // Poll GET /alert every 5s — fallback for when WebSocket is down
+  useEffect(() => {
+    function poll() {
+      getAlert()
+        .then((a) => {
+          const isActive = (a?.risk === 'high' || a?.risk === 'severe') && a?.alert === true
+          const triggerId = Number(a?.trigger_id || 0)
+          if (isActive && dssPhaseRef.current === 'IDLE' && triggerId > lastHandledTriggerIdRef.current) {
+            setAlertData(a)
+            setDssPhase('ALERT_ACTIVE')
+          }
+        })
+        .catch(() => {})
+    }
+    poll()
+    const id = window.setInterval(poll, 5000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // ── WebSocket listener (primary, instant alert delivery) ──
+  useEffect(() => {
+    let disposed = false
+    let ws = null
+    let reconnectTimer = null
+
+    function connect() {
+      if (disposed) return
+      try {
+        ws = new WebSocket(getWsUrl())
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data)
+            if (msg.type === 'alert' && msg.data && dssPhaseRef.current === 'IDLE') {
+              const a = msg.data
+              const isActive = (a?.risk === 'high' || a?.risk === 'severe') && a?.alert === true
+              const triggerId = Number(a?.trigger_id || 0)
+              if (isActive && triggerId > lastHandledTriggerIdRef.current) {
+                setAlertData(a)
+                setDssPhase('ALERT_ACTIVE')
+              }
+            }
+            if (msg.type === 'cancel') {
+              lastHandledTriggerIdRef.current = Number(msg.trigger_id || 0)
+              setDssPhase('IDLE')
+              setAlertData(null)
+            }
+          } catch {}
+        }
+
+        ws.onclose = () => {
+          ws = null
+          if (!disposed) {
+            reconnectTimer = window.setTimeout(connect, 3000)
+          }
+        }
+
+        ws.onerror = () => { ws.close() }
+      } catch {}
+    }
+
+    connect()
+
+    return () => {
+      disposed = true
+      if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      if (ws) ws.close()
+    }
+  }, [])
+
   const pageClass = 'px-6 py-6 max-w-[1400px] w-full mx-auto'
 
   return (
     <Layout currentPage={page} onNavigate={setPage} result={result}>
-      <AlertOverlay />
+
+      {/* DSS phase overlays (remote trigger) */}
+      {dssPhase === 'ALERT_ACTIVE' && (
+        <AlertOverlay
+          active={true}
+          data={alertData}
+          onComplete={() => setDssPhase('DECISION_ACTIVE')}
+        />
+      )}
+      {dssPhase === 'DECISION_ACTIVE' && (
+        <DecisionPanel
+          data={alertData}
+          onReset={() => {
+            lastHandledTriggerIdRef.current = Number(alertData?.trigger_id || 0)
+            setDssPhase('IDLE')
+            setAlertData(null)
+          }}
+        />
+      )}
+
+      {/* Slider-driven alert overlay */}
+      {sliderAlertPhase === 'ALERT' && (
+        <AlertOverlay
+          active={true}
+          data={sliderAlertData}
+          onComplete={() => setSliderAlertPhase('ADVISORY')}
+        />
+      )}
 
       
 
@@ -67,6 +201,14 @@ export default function App() {
                 operatorDecision={operatorDecision}
                 decisionImpact={decisionImpact}
               />
+
+              {/* Slider advisory panel — shown after slider alert */}
+              {sliderAlertPhase === 'ADVISORY' && result && (
+                <LiveAdvisoryPanel
+                  result={result}
+                  onDismiss={() => setSliderAlertPhase('IDLE')}
+                />
+              )}
 
               <div className="grid grid-cols-2 gap-5">
                 <SignalNoiseChart result={result} />

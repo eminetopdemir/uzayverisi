@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { AlertTriangle } from 'lucide-react'
-import { getAlertStatus } from '../api/client'
+import { getAlertStatus, getWsUrl } from '../api/client'
 
 function useAlarmAudio() {
   const audioContextRef = useRef(null)
@@ -65,15 +65,73 @@ export default function RemoteAlertOverlay() {
   const lastTriggerIdRef = useRef(0)
   const hideTimerRef = useRef(null)
   const playAlarm = useAlarmAudio()
+  const wsRef = useRef(null)
+  const reconnectTimerRef = useRef(null)
 
+  const showAlert = useCallback((durationMs = 3000) => {
+    setVisible(true)
+    document.body.classList.add('storm-lock')
+    playAlarm()
+
+    if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = window.setTimeout(() => {
+      setVisible(false)
+      document.body.classList.remove('storm-lock')
+      hideTimerRef.current = null
+    }, durationMs)
+  }, [playAlarm])
+
+  // ── WebSocket connection (primary, instant) ──
   useEffect(() => {
-    function clearActiveTimer() {
-      if (hideTimerRef.current) {
-        window.clearTimeout(hideTimerRef.current)
-        hideTimerRef.current = null
-      }
+    let disposed = false
+
+    function connectWs() {
+      if (disposed) return
+      try {
+        const ws = new WebSocket(getWsUrl())
+        wsRef.current = ws
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data)
+            if (msg.type === 'alert' && msg.data) {
+              showAlert(3000)
+            }
+            if (msg.type === 'cancel') {
+              setVisible(false)
+              document.body.classList.remove('storm-lock')
+              if (hideTimerRef.current) {
+                window.clearTimeout(hideTimerRef.current)
+                hideTimerRef.current = null
+              }
+            }
+          } catch {}
+        }
+
+        ws.onclose = () => {
+          wsRef.current = null
+          if (!disposed) {
+            reconnectTimerRef.current = window.setTimeout(connectWs, 3000)
+          }
+        }
+
+        ws.onerror = () => {
+          ws.close()
+        }
+      } catch {}
     }
 
+    connectWs()
+
+    return () => {
+      disposed = true
+      if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current)
+      if (wsRef.current) wsRef.current.close()
+    }
+  }, [showAlert])
+
+  // ── Polling fallback (5s interval, in case WebSocket is down) ──
+  useEffect(() => {
     async function pollStatus() {
       try {
         const status = await getAlertStatus()
@@ -83,32 +141,30 @@ export default function RemoteAlertOverlay() {
         if (triggerId <= lastTriggerIdRef.current) return
 
         lastTriggerIdRef.current = triggerId
-        setVisible(true)
-        document.body.classList.add('storm-lock')
-        playAlarm()
 
-        clearActiveTimer()
         const expiresAt = Number(status.expires_at || 0)
         const remainingMs = Math.max(expiresAt - Date.now(), 0)
         const durationMs = remainingMs || Number(status.duration_ms || 3000)
 
-        hideTimerRef.current = window.setTimeout(() => {
-          setVisible(false)
-          document.body.classList.remove('storm-lock')
-          hideTimerRef.current = null
-        }, durationMs)
+        showAlert(durationMs)
       } catch {}
     }
 
     pollStatus()
-    const intervalId = window.setInterval(pollStatus, 1000)
+    const intervalId = window.setInterval(pollStatus, 5000)
 
     return () => {
       window.clearInterval(intervalId)
-      clearActiveTimer()
+    }
+  }, [showAlert])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current)
       document.body.classList.remove('storm-lock')
     }
-  }, [playAlarm])
+  }, [])
 
   if (!visible) return null
 

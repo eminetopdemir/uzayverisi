@@ -8,6 +8,8 @@ Run:
     uvicorn main:app --reload --port 8000
 """
 
+import asyncio
+import json
 import math
 import os
 import pickle
@@ -19,7 +21,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -28,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from config import CFG
-from decision_engine import generate_recommendation
+from decision_engine import generate_recommendation, _operator_guidance
 from ml_model import predict as ml_predict
 from physics_model import (
     classify_risk,
@@ -41,6 +43,35 @@ from physics_model import (
     space_weather_noise,
     system_thermal_noise,
 )
+
+# ═══════════════════════════════════════════════════════════════
+# WEBSOCKET CONNECTION MANAGER
+# ═══════════════════════════════════════════════════════════════
+class ConnectionManager:
+    def __init__(self):
+        self._connections: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self._connections.append(ws)
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self._connections:
+            self._connections.remove(ws)
+
+    async def broadcast(self, data: dict):
+        payload = json.dumps(data)
+        stale: list[WebSocket] = []
+        for ws in self._connections:
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                stale.append(ws)
+        for ws in stale:
+            self.disconnect(ws)
+
+
+ws_manager = ConnectionManager()
 
 # ═══════════════════════════════════════════════════════════════
 # APP INIT
@@ -71,6 +102,7 @@ _alert_state = {
     "trigger_id": 0,
     "active_until": 0.0,
 }
+_last_alert: dict | None = None
 
 @app.on_event("startup")
 async def startup():
@@ -176,6 +208,151 @@ def _activate_remote_alert() -> dict:
     return _current_alert_status()
 
 
+def decide_action(snr: float, loss: float, risk: str) -> dict:
+    """
+    Deterministic decision engine — no ML, no randomness.
+    Maps risk level to an operational action and recommendation.
+    """
+    risk_norm = str(risk).lower()
+    if risk_norm == "severe":
+        action      = "EMERGENCY_THROTTLE"
+        recommended = "10 Mbps"
+        message     = "EXTREME SOLAR STORM — IMMEDIATE ACTION REQUIRED"
+    elif risk_norm == "high":
+        action      = "REDUCE_DATA_RATE"
+        recommended = "10 Mbps"
+        message     = "SOLAR STORM DETECTED — REDUCE DATA RATE"
+    elif risk_norm == "moderate":
+        action      = "MONITOR"
+        recommended = "Normal"
+        message     = "Increased solar activity detected"
+    else:
+        action      = "NONE"
+        recommended = "Normal"
+        message     = "System stable"
+
+    alert_active = risk_norm in ("high", "severe")
+    return {
+        "snr":         round(float(snr), 2),
+        "loss":        round(float(loss), 2),
+        "risk":        risk_norm,
+        "action":      action,
+        "recommended": recommended,
+        "message":     message,
+        "alert":       alert_active,
+    }
+
+
+def generate_recommendations(snr: float, loss: float, risk: str) -> dict:
+    """
+    Physics-consistent, deterministic mitigation recommendations.
+    Returns structured action list with expected link-budget impact.
+    """
+    risk_norm = str(risk).lower()
+    is_severe   = risk_norm == "severe" or float(snr) < -5.0 or float(loss) > 85.0
+    is_high     = (not is_severe) and (risk_norm == "high" or -5.0 <= float(snr) < 0.0)
+    is_moderate = (not is_severe) and (not is_high) and risk_norm == "moderate"
+
+    if is_severe:
+        return {
+            "priority": "CRITICAL",
+            "summary":  "Extreme solar storm — link integrity compromised",
+            "actions": [
+                {
+                    "title":  "Throttle Data Rate",
+                    "value":  "10 Mbps",
+                    "reason": "Low SNR requires reduced throughput to maintain BER",
+                },
+                {
+                    "title":  "Switch Modulation",
+                    "value":  "QPSK",
+                    "reason": "Higher robustness against noise and scintillation",
+                },
+                {
+                    "title":  "Increase FEC",
+                    "value":  "1/2 coding rate",
+                    "reason": "Adds redundancy to compensate packet loss",
+                },
+                {
+                    "title":  "Enable Interleaving",
+                    "value":  "ON",
+                    "reason": "Mitigates burst errors caused by ionospheric disturbance",
+                },
+                {
+                    "title":  "Suspend Non-critical Channels",
+                    "value":  "ON",
+                    "reason": "Preserve bandwidth for critical telemetry",
+                },
+            ],
+            "expected_result": {
+                "snr_gain":       "+3 to +6 dB",
+                "loss_reduction": "up to 40%",
+            },
+        }
+    elif is_high:
+        return {
+            "priority": "HIGH",
+            "summary":  "Solar storm detected — link degradation in progress",
+            "actions": [
+                {
+                    "title":  "Reduce Data Rate",
+                    "value":  "20 Mbps",
+                    "reason": "Moderate SNR degradation requires partial throughput reduction",
+                },
+                {
+                    "title":  "Switch Modulation",
+                    "value":  "16-QAM",
+                    "reason": "Balance throughput and noise robustness",
+                },
+                {
+                    "title":  "Increase FEC",
+                    "value":  "2/3 coding rate",
+                    "reason": "Add moderate redundancy to reduce packet error rate",
+                },
+                {
+                    "title":  "Monitor BER",
+                    "value":  "Continuous",
+                    "reason": "Track bit error rate trend for escalation decision",
+                },
+            ],
+            "expected_result": {
+                "snr_gain":       "+1 to +3 dB",
+                "loss_reduction": "up to 20%",
+            },
+        }
+    elif is_moderate:
+        return {
+            "priority": "MODERATE",
+            "summary":  "Increased solar activity — monitor link quality",
+            "actions": [
+                {
+                    "title":  "Enable Monitoring",
+                    "value":  "ON",
+                    "reason": "Track SNR and BER trends in real time",
+                },
+                {
+                    "title":  "Prepare FEC Plan",
+                    "value":  "Standby",
+                    "reason": "Pre-configure FEC for rapid activation if conditions worsen",
+                },
+            ],
+            "expected_result": {
+                "snr_gain":       "0 dB",
+                "loss_reduction": "minimal",
+            },
+        }
+    else:
+        return {
+            "priority": "NOMINAL",
+            "summary":  "System operating normally",
+            "actions":  [],
+            "expected_result": {
+                "snr_gain":       "0 dB",
+                "loss_reduction": "none",
+            },
+        }
+
+
 def _safe_snr_db(snr_value: float) -> float:
     """
     Normalize SNR to a realistic range.
@@ -239,7 +416,10 @@ def _fmt_result(r: dict) -> dict:
         "pr_W":       float(r["Pr_W"]),
         "fspl_dB":    r["fspl_dB"],
     }
-    out["guidance"] = generate_recommendation(out["snr"], out["loss"])
+    out["guidance"] = _operator_guidance(out["snr"], out["loss"])
+    decision = generate_recommendation({"snr": out["snr"], "loss": out["loss"], "risk": out["risk"]})
+    out["alert"] = decision["alert"]
+    out["message"] = decision["message"]
     return out
 
 
@@ -309,14 +489,101 @@ async def root():
 async def trigger_storm():
     return _activate_remote_alert()
 
-@app.post("/trigger-storm")
-async def trigger_storm():
-    return _activate_remote_alert()
+
+# ── POST /trigger-alert ───────────────────────────────────────────
+@app.post("/trigger-alert", summary="Run decision engine and store latest alert")
+async def trigger_alert():
+    """
+    Simulates a G5 solar storm event, runs the deterministic decision engine,
+    stores the result in memory, and also activates the 3-second remote alert flash.
+    No ML — purely physics + rule-based logic.
+    """
+    global _last_alert
+
+    # G5-level storm parameters (worst-case scenario for demonstration)
+    BZ, SPEED, DENSITY, KP, FLUX = -50.0, 850.0, 50.0, 9.0, 200.0
+    r = predict_realtime(bz=BZ, speed=SPEED, density=DENSITY, kp=KP, flux=FLUX)
+    clean    = _sanitize_comm_metrics(float(r["snr_dB"]), r["storm_risk"])
+    snr, loss, risk = clean["snr"], clean["loss"], clean["risk"]
+    decision = decide_action(snr, loss, risk)
+    recs     = generate_recommendations(snr, loss, risk)
+
+    # Activate remote alert first so trigger_id is incremented
+    _activate_remote_alert()
+
+    _last_alert = {
+        **decision,
+        "recommendations": recs,
+        "bz":      BZ,
+        "speed":   SPEED,
+        "density": DENSITY,
+        "kp":      KP,
+        "timestamp": int(time.time() * 1000),
+        "trigger_id": int(_alert_state["trigger_id"]),
+    }
+
+    # Broadcast to all connected WebSocket clients instantly
+    await ws_manager.broadcast({"type": "alert", "data": _last_alert})
+
+    return _last_alert
+
+
+# ── GET /alert ────────────────────────────────────────────────────
+@app.get("/alert", summary="Return stored decision-engine alert")
+async def get_alert():
+    """
+    Returns the latest alert produced by POST /trigger-alert.
+    Returns a safe default (risk=none, alert=false) when no alert has been triggered.
+    """
+    if _last_alert is None:
+        return {
+            "snr":             0.0,
+            "loss":            0.0,
+            "risk":            "none",
+            "action":          "NONE",
+            "recommended":     "Normal",
+            "message":         "System stable",
+            "alert":           False,
+            "recommendations": generate_recommendations(0.0, 0.0, "none"),
+            "bz":              0.0,
+            "speed":           400.0,
+            "density":         5.0,
+            "kp":              1.0,
+            "timestamp":       None,
+        }
+    return _last_alert
+
+
+@app.post("/cancel-alert", summary="Cancel active alert")
+async def cancel_alert():
+    """
+    Clears the active alert so it no longer triggers on any device.
+    Resets _last_alert and deactivates the remote flash.
+    """
+    global _last_alert
+    _last_alert = None
+    _alert_state["active_until"] = 0.0
+    await ws_manager.broadcast({"type": "cancel", "trigger_id": int(_alert_state["trigger_id"])})
+    return {"status": "cancelled", "trigger_id": int(_alert_state["trigger_id"])}
 
 
 @app.get("/alert-status", summary="Get remote alert status")
 async def alert_status():
     return _current_alert_status()
+
+
+# ── WebSocket /ws/alerts ──────────────────────────────────────────
+@app.websocket("/ws/alerts")
+async def ws_alerts(ws: WebSocket):
+    await ws_manager.connect(ws)
+    try:
+        while True:
+            # Keep connection alive; client can send pings
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(ws)
+    except Exception:
+        ws_manager.disconnect(ws)
 
 
 # ── POST /predict ─────────────────────────────────────────────────
@@ -378,6 +645,50 @@ async def predict(req: PredictRequest):
         _snr_history.pop(0)
 
     return out
+
+
+# ── POST /analyze ──────────────────────────────────────────────────
+class AnalyzeRequest(BaseModel):
+    snr:  float = Field(..., description="Signal-to-noise ratio [dB]",   example=-10.81)
+    loss: float = Field(..., description="Data loss percentage [0–100]", example=97.34,
+                        ge=0.0, le=100.0)
+    risk: str   = Field(..., description="Risk level: none|low|moderate|high|severe",
+                        example="severe")
+
+
+@app.post("/analyze", summary="Deterministic decision recommendation from physics model output")
+async def analyze(req: AnalyzeRequest):
+    """
+    Accepts pre-computed physics model metrics (SNR, loss, risk) and returns a
+    structured operational recommendation produced by the deterministic decision
+    engine.  No machine-learning is involved.
+
+    Decision logic (rule-based):
+    - risk → action + recommended data rate
+    - SNR < -5 dB overrides data rate to 10 Mbps
+    - loss > 90 % → priority "critical"; loss 50–90 % → priority "high"
+    - alert=true when risk is "high" or "severe"
+    """
+    risk_norm = req.risk.strip().lower()
+    valid_risks = {"none", "low", "moderate", "high", "severe"}
+    if risk_norm not in valid_risks:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid risk value '{req.risk}'. Must be one of: {sorted(valid_risks)}.",
+        )
+
+    model_output = {
+        "snr":  req.snr,
+        "loss": req.loss,
+        "risk": risk_norm,
+    }
+
+    try:
+        recommendation = generate_recommendation(model_output)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return recommendation
 
 
 # ── GET /scenarios ─────────────────────────────────────────────────

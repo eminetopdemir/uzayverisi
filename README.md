@@ -1,48 +1,63 @@
-# SatComm Monitor
+# Space Weather Communication DSS
 
-## Secure Remote Alert
+Real-time **Deep-Space / Satellite Communication Decision Support System** that monitors space weather conditions and provides adaptive link-budget analysis with ML-powered predictions.
 
-This project includes a backend-controlled cinematic emergency alert channel for the dashboard.
+## Features
 
-### Backend secret
+- **Live Link-Budget Analysis** — SNR, data loss, received power calculations based on real space weather data
+- **Adaptive Decision Engine** — Automatic modulation, coding rate, and power recommendations
+- **ML Predictions** — Random Forest model trained on space weather parameters
+- **Real-Time Alerts** — WebSocket-based instant alert system across devices
+- **Interactive Dashboard** — React frontend with scenario simulation and optimization panels
 
-Set the alert secret on the backend host before starting FastAPI:
+## Architecture
+
+| Layer | Tech |
+|-------|------|
+| Backend | FastAPI + Uvicorn (Python 3.12) |
+| Frontend | React + Vite + Tailwind CSS |
+| Real-time | WebSocket |
+| Deployment | Docker Compose + Nginx reverse proxy |
+
+## Quick Start
+
+### Docker (recommended)
 
 ```bash
-export SATCOMM_ALERT_SECRET="replace-with-a-long-random-secret"
+docker compose up -d --build
+```
+
+The app will be available at `http://localhost`.
+
+### Local Development
+
+```bash
+# Backend
 cd backend
+pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
+
+# Frontend
+cd frontend
+npm install
+npm run dev
 ```
 
-The secret is validated only on the backend. It is never exposed to the frontend bundle.
+## Data Sources
 
-### Trigger from a phone
+- **GOES satellite** — Solar X-ray flux, proton flux
+- **OMNIWeb** — Solar wind speed, IMF Bz, proton density
+- **RTSW** — Real-time solar wind plot data
 
-Send an authorized request to the backend from any device on the same network or through your deployed endpoint:
+## API Endpoints
 
-```bash
-curl -X POST http://YOUR_HOST:8000/trigger-storm \
-	-H "Authorization: Bearer replace-with-a-long-random-secret"
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/scenarios` | List all space weather scenarios |
+| POST | `/api/predict` | ML prediction for given parameters |
+| GET | `/api/alert-status` | Current alert state |
+| WS | `/ws/alerts` | Real-time alert stream |
 
-You can also open the stealth mobile controller in a browser:
+## License
 
-```text
-http://YOUR_FRONTEND_HOST:5173/remote-control?token=replace-with-a-long-random-secret
-```
-
-The page renders a single dark-theme trigger button and sends a silent `POST /trigger-storm` request.
-
-### Polling behavior
-
-The React dashboard polls `GET /alert-status` every second. When an alert is active, the UI shows a full-screen cinematic overlay for 3 seconds and then clears automatically.
-
-### Endpoints
-
-- `POST /trigger-alert`
-	- Backward-compatible secure trigger endpoint
-- `POST /trigger-storm`
-	- Requires `Authorization: Bearer <secret>`
-	- Starts a 3-second alert window
-- `GET /alert-status`
-	- Returns current alert state for frontend polling
+MIT

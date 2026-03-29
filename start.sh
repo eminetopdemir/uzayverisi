@@ -12,11 +12,11 @@ echo "🛰️  SatComm Monitor — Starting services"
 echo "──────────────────────────────────────────"
 
 # ── Backend (FastAPI) ──
-echo "▶  Backend  →  http://localhost:8000"
+echo "▶  Backend  →  http://0.0.0.0:8000"
 echo "   API docs  →  http://localhost:8000/docs"
 cd "$ROOT"
 source .venv/bin/activate
-uvicorn backend.main:app --port 8000 --reload &
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
 
 # ── Frontend (Vite + React) ──

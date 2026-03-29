@@ -1,7 +1,5 @@
 import { useState } from 'react'
-import axios from 'axios'
-
-const BACKEND_URL = 'http://192.168.111.1:8000'
+import { triggerAlert, cancelAlert } from '../api/client'
 
 export default function MobileTriggerPage() {
   const [status, setStatus] = useState('idle') // idle | loading | success | error
@@ -12,11 +10,27 @@ export default function MobileTriggerPage() {
     setStatus('loading')
     setMessage('')
     try {
-      await axios.post(`${BACKEND_URL}/trigger-storm`, null, { timeout: 8000 })
+      await triggerAlert()
       setStatus('success')
       setMessage('STORM TRIGGERED')
     } catch (err) {
       const detail = err?.response?.data?.detail || err?.message || 'Request failed.'
+      setStatus('error')
+      setMessage(detail)
+      setTimeout(() => setStatus('idle'), 4000)
+    }
+  }
+
+  async function handleCancel() {
+    if (status !== 'success') return
+    setStatus('loading')
+    setMessage('')
+    try {
+      await cancelAlert()
+      setStatus('idle')
+      setMessage('')
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Cancel failed.'
       setStatus('error')
       setMessage(detail)
       setTimeout(() => setStatus('idle'), 4000)
@@ -78,6 +92,21 @@ export default function MobileTriggerPage() {
         </button>
       </div>
 
+      {/* Cancel button — visible after successful trigger */}
+      {status === 'success' && (
+        <div className="mobile-trigger-btn-wrap">
+          <button
+            type="button"
+            className="mobile-cancel-btn"
+            onClick={handleCancel}
+            aria-label="Cancel Alert"
+          >
+            <span className="mobile-cancel-btn-icon">✖</span>
+            <span className="mobile-cancel-btn-text">CANCEL ALERT</span>
+          </button>
+        </div>
+      )}
+
       {/* Feedback message */}
       {message && (
         <div
@@ -92,8 +121,8 @@ export default function MobileTriggerPage() {
 
       {/* Footer info */}
       <footer className="mobile-trigger-footer">
-        <p>Sends POST /trigger-storm to the backend</p>
-        <p className="mobile-trigger-footer-url">{BACKEND_URL}</p>
+        <p>Sends POST /trigger-alert to the backend</p>
+        <p className="mobile-trigger-footer-url">{window.location.origin}</p>
       </footer>
     </div>
   )

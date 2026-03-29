@@ -40,7 +40,7 @@ def _confidence_from_snr(snr: float, loss: float, mode: str) -> float:
     return round(confidence, 2)
 
 
-def generate_recommendation(snr: float, loss: float) -> dict:
+def _operator_guidance(snr: float, loss: float) -> dict:
     """
     Create operator guidance from communication quality metrics.
 
@@ -109,6 +109,104 @@ def generate_recommendation(snr: float, loss: float) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Public decision-layer entry point  (deterministic, rule-based, no ML)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RISK_TABLE: dict[str, tuple[str, int, str, str]] = {
+    # risk → (action, datarate_mbps, message, explanation)
+    "none": (
+        "KEEP_NORMAL",
+        100,
+        "Nominal space weather. Maintain current data rate.",
+        "No ionospheric disturbance detected. Link operating at full capacity.",
+    ),
+    "low": (
+        "MONITOR",
+        80,
+        "Minor space weather activity. Monitor link quality.",
+        "Slight ionospheric irregularities observed. Marginal SNR reduction expected.",
+    ),
+    "moderate": (
+        "ADAPTIVE_REDUCTION",
+        50,
+        "Moderate space weather disturbance. Reduce data rate to preserve link quality.",
+        "Elevated ionospheric activity causing measurable signal degradation.",
+    ),
+    "high": (
+        "AGGRESSIVE_REDUCTION",
+        20,
+        "Severe space weather event in progress. Aggressive data-rate reduction required.",
+        "Significant ionospheric disturbance causing serious signal degradation.",
+    ),
+    "severe": (
+        "REDUCE_DATARATE",
+        10,
+        "Solar storm detected. Reduce data rate to maintain link stability.",
+        "High ionospheric disturbance causing severe signal degradation.",
+    ),
+}
+
+
+def generate_recommendation(model_output: dict) -> dict:
+    """
+    Deterministic, rule-based decision layer for satellite communication operators.
+
+    Parameters
+    ----------
+    model_output : dict
+        Must contain:
+            snr  (float) – Signal-to-noise ratio in dB.
+            loss (float) – Data loss percentage (0–100).
+            risk (str)   – Risk level: "none" | "low" | "moderate" | "high" | "severe".
+
+    Returns
+    -------
+    dict
+        Structured operational recommendation with action, data-rate, priority,
+        alert flag and human-readable explanation.
+    """
+    snr: float  = float(model_output["snr"])
+    loss: float = float(model_output["loss"])
+    risk: str   = str(model_output.get("risk", "none")).lower()
+
+    # ── Risk → action mapping ────────────────────────────────────────────────
+    if risk not in _RISK_TABLE:
+        # Treat unknown risk values defensively as "moderate"
+        risk = "moderate"
+
+    action, datarate, message, explanation = _RISK_TABLE[risk]
+
+    # ── Override: SNR < -5 forces minimum data rate ──────────────────────────
+    if snr < -5.0:
+        datarate = 10
+
+    # ── Priority from loss percentage ────────────────────────────────────────
+    if loss > 90.0:
+        priority = "critical"
+    elif loss >= 50.0:
+        priority = "high"
+    elif loss >= 20.0:
+        priority = "medium"
+    else:
+        priority = "low"
+
+    # ── Alert flag ───────────────────────────────────────────────────────────
+    alert: bool = risk in ("high", "severe")
+
+    return {
+        "snr":                      round(snr, 2),
+        "loss":                     round(loss, 2),
+        "risk":                     risk,
+        "action":                   action,
+        "recommended_datarate_mbps": datarate,
+        "message":                  message,
+        "explanation":              explanation,
+        "priority":                 priority,
+        "alert":                    alert,
+    }
+
+
 def recommended_data_rate_mbps(snr: float, nominal_rate_mbps: float = 120.0) -> float:
     """
     Map SNR to an operator-recommended data rate profile (Mbps).
@@ -147,7 +245,7 @@ def build_data_rate_profile(
         raise ValueError("times contains values that cannot be parsed as datetime")
 
     rates = [recommended_data_rate_mbps(v, nominal_rate_mbps) for v in snr_arr]
-    modes = [generate_recommendation(v, 0.0)["mode"] for v in snr_arr]
+    modes = [_operator_guidance(v, 0.0)["mode"] for v in snr_arr]
 
     return pd.DataFrame(
         {
