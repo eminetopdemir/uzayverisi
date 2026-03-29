@@ -48,8 +48,8 @@ _MODEL_PATH = CFG.paths.outputs / "snr_model.pkl"
 # Lojistik eğri: loss% = 100 / (1 + exp(k · (SNR_dB − SNR_mid)))
 # SNR_mid = -8 dB → %50 kayıp (mevcut ortalama SNR civarı)
 # k       =  0.45 → geçiş eğimi (her 5 dB'de ~%30 değişim)
-_LOSS_K   = 0.45
-_LOSS_MID = -8.0
+_SNR_DB_MIN = -20.0
+_SNR_DB_MAX = 20.0
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -260,7 +260,25 @@ def snr_to_data_loss(snr_db: Union[float, np.ndarray]) -> Union[float, np.ndarra
     --------
     float veya np.ndarray  —  veri kaybı yüzdesi [0, 100]
     """
-    return 100.0 / (1.0 + np.exp(_LOSS_K * (np.asarray(snr_db) - _LOSS_MID)))
+    x = np.clip(np.asarray(snr_db, dtype=float), _SNR_DB_MIN, _SNR_DB_MAX)
+    return 100.0 / (1.0 + np.exp((x - 0.0) / 3.0))
+
+
+def _normalize_snr_db(snr_raw: Union[float, np.ndarray]) -> np.ndarray:
+    """
+    Normalize predicted SNR values to realistic dB range.
+
+    If model output is suspiciously large, treat it as linear SNR and convert:
+        SNR_dB = 10 * log10(SNR_linear)
+    Then clamp to [-20, +20] dB.
+    """
+    x = np.asarray(snr_raw, dtype=float)
+    x = np.where(np.isfinite(x), x, _SNR_DB_MIN)
+
+    # Guard against unrealistic magnitudes by interpreting very large values
+    # as linear SNR and converting to dB.
+    x = np.where(np.abs(x) > 120.0, 10.0 * np.log10(np.maximum(x, 1e-20)), x)
+    return np.clip(x, _SNR_DB_MIN, _SNR_DB_MAX)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -329,8 +347,9 @@ def predict(
             X_feat[col] = 0.0
     X_feat = X_feat[feature_names]
 
-    snr_pred = pipe.predict(X_feat.values)
-    loss_pct  = snr_to_data_loss(snr_pred)
+    snr_pred_raw = pipe.predict(X_feat.values)
+    snr_pred = _normalize_snr_db(snr_pred_raw)
+    loss_pct = snr_to_data_loss(snr_pred)
 
     # Fırtına risk seviyesi
     def _risk(loss: float) -> str:
