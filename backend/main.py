@@ -170,6 +170,12 @@ def _current_alert_status() -> dict:
     }
 
 
+def _activate_remote_alert() -> dict:
+    _alert_state["trigger_id"] = int(_alert_state["trigger_id"]) + 1
+    _alert_state["active_until"] = time.time() + 3.0
+    return _current_alert_status()
+
+
 def _safe_snr_db(snr_value: float) -> float:
     """
     Normalize SNR to a realistic range.
@@ -299,14 +305,13 @@ def _simulate_comm_with_reduction(req: DecisionSimRequest, reduction_pct: float)
 async def root():
     return {"status": "ok", "service": "SatComm Monitor API"}
 
+@app.post("/trigger-storm")
+async def trigger_storm():
+    return _activate_remote_alert()
 
-@app.post("/trigger-alert", summary="Securely trigger cinematic alert")
-async def trigger_alert(authorization: Optional[str] = Header(default=None)):
-    _require_alert_authorization(authorization)
-
-    _alert_state["trigger_id"] = int(_alert_state["trigger_id"]) + 1
-    _alert_state["active_until"] = time.time() + 3.0
-    return _current_alert_status()
+@app.post("/trigger-storm")
+async def trigger_storm():
+    return _activate_remote_alert()
 
 
 @app.get("/alert-status", summary="Get remote alert status")

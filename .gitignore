@@ -1,5 +1,14 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
-outputs/
+
+# Node
+node_modules/
+dist/
+
+# Logs
+*.log
+
+# Env
 .env

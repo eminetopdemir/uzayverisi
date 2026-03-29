@@ -6,7 +6,8 @@ const NAV = [
   { id: 'history',     label: 'History',      icon: Activity },
   { id: 'scenarios',   label: 'Scenarios',    icon: BarChart3 },
   { id: 'optimize',    label: 'Optimize',     icon: Settings },
-  { id: 'explain',     label: 'How It Works', icon: BookOpen },
+  
+
 ]
 
 export default function Layout({ currentPage, onNavigate, result, children }) {

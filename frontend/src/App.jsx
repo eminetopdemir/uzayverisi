@@ -6,11 +6,16 @@ import { TimeSeriesChart, SignalNoiseChart, HistoricalChart } from './components
 import ScenarioView  from './components/ScenarioView'
 import OptimizationPanel from './components/OptimizationPanel'
 import Explainer     from './components/Explainer'
-import RemoteAlertOverlay from './components/RemoteAlertOverlay'
+import AlertOverlay from './components/AlertOverlay'
+import MobileTriggerPage from './components/MobileTriggerPage'
 import usePhysics    from './hooks/usePhysics'
 import { history as apiHistory } from './api/client'
 
 export default function App() {
+  // ── Standalone mobile route: no Layout, no sidebar ──────────────
+  if (window.location.pathname === '/mobile') {
+    return <MobileTriggerPage />
+  }
   const [page, setPage] = useState('dashboard')
   const [csvHistory, setCsvHistory] = useState([])
   const [systemMode, setSystemMode] = useState('normal')
@@ -28,7 +33,9 @@ export default function App() {
 
   return (
     <Layout currentPage={page} onNavigate={setPage} result={result}>
-      <RemoteAlertOverlay />
+      <AlertOverlay />
+
+      
 
       {/* ── DASHBOARD ── */}
       {page === 'dashboard' && (
@@ -148,6 +155,7 @@ export default function App() {
           <Explainer />
         </div>
       )}
+
     </Layout>
   )
 }
