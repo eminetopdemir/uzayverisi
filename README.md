@@ -58,6 +58,7 @@ npm run dev
 | GET | `/api/alert-status` | Current alert state |
 | WS | `/ws/alerts` | Real-time alert stream |
 
+
 ## License
 
 MIT
