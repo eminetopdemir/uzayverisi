@@ -59,6 +59,7 @@ npm run dev
 | WS | `/ws/alerts` | Real-time alert stream |
 
 
-## License
+## License 
 
 MIT
+
